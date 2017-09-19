@@ -21,7 +21,9 @@ extern crate petgraph;
 extern crate vec_graph;
 
 use petgraph::prelude::*;
-use vec_graph::Graph; // or ::VecGraph if you want to have both available.
+
+use vec_graph::{NodeIndex, EdgeIndex, Graph}; 
+// or: use vec_graph::{NodeIndex, EdgeIndex, VecGraph};
 ```
 
 ## License
