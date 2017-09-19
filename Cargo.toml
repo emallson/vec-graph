@@ -1,0 +1,14 @@
+[package]
+authors = ["J David Smith <emallson@atlanis.net>"]
+name = "vec-graph"
+version = "0.1.0"
+
+[dependencies]
+fnv = "1.0.5"
+petgraph = "0.4.7"
+
+[dev-dependencies]
+
+[dev-dependencies.capngraph]
+git = "https://github.com/emallson/capngraph.git"
+optional = false
