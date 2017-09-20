@@ -175,15 +175,6 @@ impl<N, E> VecGraph<N, E> {
         self.num_edges
     }
 
-    pub fn edges_directed<'a>(&'a self, a: NodeIndex, dir: Direction) -> Edges<'a, N, E> {
-        Edges {
-            graph: self,
-            internal: match dir {
-                Direction::Outgoing => self.outgoing_edges[a.index()].iter(),
-                Direction::Incoming => self.incoming_edges[a.index()].iter(),
-            },
-        }
-    }
 
     pub fn edge_indices_directed<'a, F>
         (&'a self,
@@ -511,6 +502,37 @@ impl<'a, N, E> IntoEdgeReferences for &'a Graph<N, E> {
         self.edges.iter().enumerate().map(mapper::<E>)
     }
 }
+
+pub trait IntoNeighborEdgesDirected: petgraph::visit::GraphRef + petgraph::visit::Data {
+    type ER: EdgeRef<NodeId=Self::NodeId, EdgeId=Self::EdgeId, Weight=Self::EdgeWeight>;
+    type NeighborEdgesDirected: Iterator<Item = Self::ER>;
+
+    fn edges_directed(self, a: Self::NodeId, dir: Direction) -> Self::NeighborEdgesDirected;
+}
+
+impl<'a, N, E> IntoNeighborEdgesDirected for &'a Graph<N, E> {
+    type NeighborEdgesDirected = Edges<'a, N, E>;
+    type ER = EdgeReference<'a, E>;
+    fn edges_directed(self, a: NodeIndex, dir: Direction) -> Edges<'a, N, E> {
+        Edges {
+            graph: self,
+            internal: match dir {
+                Direction::Outgoing => self.outgoing_edges[a.index()].iter(),
+                Direction::Incoming => self.incoming_edges[a.index()].iter(),
+            },
+        }
+    }
+}
+
+impl<'a, N, E> IntoNeighborEdgesDirected for &'a petgraph::Graph<N, E> {
+    type NeighborEdgesDirected = petgraph::graph::Edges<'a, E, petgraph::Directed>;
+    type ER = petgraph::graph::EdgeReference<'a, E>;
+
+    fn edges_directed(self, a: Self::NodeId, dir: Direction) -> Self::NeighborEdgesDirected {
+        petgraph::Graph::edges_directed(self, a, dir)
+    }
+}
+
 
 #[cfg(test)]
 mod test {
