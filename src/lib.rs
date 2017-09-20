@@ -38,6 +38,12 @@ impl graph::GraphIndex for NodeIndex {
     fn is_node_index() -> bool { true }
 }
 
+impl From<usize> for NodeIndex {
+    fn from(u: usize) -> Self {
+        Self::new(u)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub struct EdgeIndex(u32);
 
@@ -53,6 +59,12 @@ impl graph::GraphIndex for EdgeIndex {
     }
 
     fn is_node_index() -> bool { false }
+}
+
+impl From<usize> for EdgeIndex {
+    fn from(u: usize) -> Self {
+        EdgeIndex(u as u32)
+    }
 }
 
 /// A directed adjacency-list graph implemented on Vectors. Indices are all `usize` as a result.
