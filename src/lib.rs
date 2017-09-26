@@ -137,6 +137,37 @@ impl<N: Default + Clone, E> VecGraph<N, E> {
             outgoing_edges,
         }
     }
+
+    pub fn oriented_from_edges(mut edges: Vec<(u32, u32, E)>, orientation: Direction) -> Self {
+        let num_nodes = edges.iter().fold(0, |prev, &(a, b, _)| {
+            ::std::cmp::max(a, ::std::cmp::max(b, prev))
+        }) as usize + 1;
+        let mut incoming_edges = vec![Vec::new(); num_nodes];
+        let mut outgoing_edges = vec![Vec::new(); num_nodes];
+
+        match orientation {
+            Incoming => {
+                edges.sort_unstable_by(|&(_, ref a, _), &(_, ref b, _)| a.cmp(b));
+            },
+            Outgoing => {
+                edges.sort_unstable_by(|&(ref a, _, _), &(ref b, _, _)| a.cmp(b));
+            }
+        }
+
+        for (i, &(source, target, _)) in edges.iter().enumerate() {
+            incoming_edges[target as usize].push(i);
+            outgoing_edges[source as usize].push(i);
+        }
+
+        VecGraph {
+            num_nodes,
+            num_edges: edges.len(),
+            node_weights: vec![N::default(); num_nodes],
+            edges: edges.into_iter().map(|(a, b, w)| (a as usize, b as usize, w)).collect(),
+            incoming_edges,
+            outgoing_edges,
+        }
+    }
 }
 
 impl<N, E> VecGraph<N, E> {
