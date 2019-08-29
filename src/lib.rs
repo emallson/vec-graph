@@ -1,21 +1,25 @@
-extern crate petgraph;
-extern crate fnv;
 #[cfg(test)]
 extern crate capngraph;
+extern crate fnv;
+extern crate petgraph;
 
-use petgraph::graph;
-use petgraph::Direction;
-use petgraph::visit::{IntoNeighborsDirected, IntoNeighbors, GraphBase, NodeCount,
-                          NodeIndexable, NodeCompactIndexable, EdgeRef, IntoNodeIdentifiers, Data,
-                          GraphProp, IntoNodeReferences, IntoEdgeReferences};
-use petgraph::Direction::*;
-use std::vec::IntoIter;
-use std::slice::Iter;
-use std::ops::{Index, IndexMut, Range};
-use std::iter::{Map, Iterator, Enumerate};
 use fnv::{FnvHashMap, FnvHashSet};
+use petgraph::graph;
+use petgraph::visit::{
+    Data, EdgeRef, GraphBase, GraphProp, IntoEdgeReferences, IntoEdges, IntoNeighbors,
+    IntoNeighborsDirected, IntoNodeIdentifiers, IntoNodeReferences, NodeCompactIndexable,
+    NodeCount, NodeIndexable,
+};
+use petgraph::Direction;
+use petgraph::Direction::*;
+use petgraph::{Directed, EdgeType, Undirected};
+use std::iter::{Enumerate, Iterator, Map};
+use std::marker::PhantomData;
+use std::ops::{Index, IndexMut, Range};
+use std::slice::Iter;
+use std::vec::IntoIter;
 
-pub type Graph<N, E> = VecGraph<N, E>;
+pub type Graph<N, E, D = Directed> = VecGraph<N, E, D>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Ord, PartialOrd, Eq, Hash)]
 pub struct NodeIndex(u32);
@@ -35,7 +39,9 @@ impl graph::GraphIndex for NodeIndex {
         self.0 as usize
     }
 
-    fn is_node_index() -> bool { true }
+    fn is_node_index() -> bool {
+        true
+    }
 }
 
 impl From<usize> for NodeIndex {
@@ -51,6 +57,10 @@ impl EdgeIndex {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+
+    pub fn new(idx: usize) -> Self {
+        EdgeIndex(idx as u32)
+    }
 }
 
 impl graph::GraphIndex for EdgeIndex {
@@ -58,7 +68,9 @@ impl graph::GraphIndex for EdgeIndex {
         self.0 as usize
     }
 
-    fn is_node_index() -> bool { false }
+    fn is_node_index() -> bool {
+        false
+    }
 }
 
 impl From<usize> for EdgeIndex {
@@ -69,22 +81,27 @@ impl From<usize> for EdgeIndex {
 
 /// A directed adjacency-list graph implemented on Vectors. Indices are all `usize` as a result.
 #[derive(Clone, Debug)]
-pub struct VecGraph<N, E> {
+pub struct VecGraph<N, E, D = Directed> {
     num_nodes: usize,
     num_edges: usize,
     node_weights: Vec<N>,
     edges: Vec<(usize, usize, E)>,
     incoming_edges: Vec<Vec<usize>>,
     outgoing_edges: Vec<Vec<usize>>,
+    ty: PhantomData<D>,
 }
 
-impl<N, E: Clone> VecGraph<N, E> {
-    pub fn from_petgraph(g: graph::Graph<N, E>) -> Self {
+impl<N, E: Clone, D> VecGraph<N, E, D>
+where
+    D: EdgeType,
+{
+    pub fn from_petgraph(g: graph::Graph<N, E, D>) -> Self {
         let (nodes, edges) = g.into_nodes_edges();
         let mut incoming_edges = vec![Vec::new(); nodes.len()];
         let mut outgoing_edges = vec![Vec::new(); nodes.len()];
 
-        let edges = edges.into_iter()
+        let edges = edges
+            .into_iter()
             .map(|edge| (edge.source().index(), edge.target().index(), edge.weight))
             .collect::<Vec<_>>();
 
@@ -100,11 +117,15 @@ impl<N, E: Clone> VecGraph<N, E> {
             edges: edges,
             incoming_edges: incoming_edges,
             outgoing_edges: outgoing_edges,
+            ty: PhantomData,
         }
     }
 }
 
-impl<N: Default + Clone, E> VecGraph<N, E> {
+impl<N: Default + Clone, E, D> VecGraph<N, E, D>
+where
+    D: EdgeType,
+{
     pub fn new_with_nodes(node_count: usize) -> Self {
         VecGraph {
             num_nodes: node_count,
@@ -113,13 +134,15 @@ impl<N: Default + Clone, E> VecGraph<N, E> {
             edges: vec![],
             incoming_edges: vec![Vec::new(); node_count],
             outgoing_edges: vec![Vec::new(); node_count],
+            ty: PhantomData,
         }
     }
 
     pub fn from_edges(edges: Vec<(u32, u32, E)>) -> Self {
         let num_nodes = edges.iter().fold(0, |prev, &(a, b, _)| {
             ::std::cmp::max(a, ::std::cmp::max(b, prev))
-        }) as usize + 1;
+        }) as usize
+            + 1;
         let mut incoming_edges = vec![Vec::new(); num_nodes];
         let mut outgoing_edges = vec![Vec::new(); num_nodes];
 
@@ -132,23 +155,28 @@ impl<N: Default + Clone, E> VecGraph<N, E> {
             num_nodes,
             num_edges: edges.len(),
             node_weights: vec![N::default(); num_nodes],
-            edges: edges.into_iter().map(|(a, b, w)| (a as usize, b as usize, w)).collect(),
+            edges: edges
+                .into_iter()
+                .map(|(a, b, w)| (a as usize, b as usize, w))
+                .collect(),
             incoming_edges,
             outgoing_edges,
+            ty: PhantomData,
         }
     }
 
     pub fn oriented_from_edges(mut edges: Vec<(u32, u32, E)>, orientation: Direction) -> Self {
         let num_nodes = edges.iter().fold(0, |prev, &(a, b, _)| {
             ::std::cmp::max(a, ::std::cmp::max(b, prev))
-        }) as usize + 1;
+        }) as usize
+            + 1;
         let mut incoming_edges = vec![Vec::new(); num_nodes];
         let mut outgoing_edges = vec![Vec::new(); num_nodes];
 
         match orientation {
             Incoming => {
                 edges.sort_unstable_by(|&(_, ref a, _), &(_, ref b, _)| a.cmp(b));
-            },
+            }
             Outgoing => {
                 edges.sort_unstable_by(|&(ref a, _, _), &(ref b, _, _)| a.cmp(b));
             }
@@ -163,23 +191,61 @@ impl<N: Default + Clone, E> VecGraph<N, E> {
             num_nodes,
             num_edges: edges.len(),
             node_weights: vec![N::default(); num_nodes],
-            edges: edges.into_iter().map(|(a, b, w)| (a as usize, b as usize, w)).collect(),
+            edges: edges
+                .into_iter()
+                .map(|(a, b, w)| (a as usize, b as usize, w))
+                .collect(),
             incoming_edges,
             outgoing_edges,
+            ty: PhantomData,
         }
     }
 }
 
-impl<N, E> VecGraph<N, E> {
-    pub fn node_indices(&self) -> Map<Range<usize>, fn(usize) -> NodeIndex> {
-        (0..self.num_nodes).map(NodeIndex::new)
+impl<N, E, D> VecGraph<N, E, D>
+where
+    D: EdgeType,
+{
+    #[inline]
+    pub fn is_directed() -> bool {
+        D::is_directed()
     }
 
-    pub fn find_edge(&self, src: NodeIndex, dst: NodeIndex) -> Option<EdgeIndex> {
-        self.outgoing_edges[src.index()]
-            .iter()
-            .find(|&idx| self.edges[*idx].1 == dst.index())
-            .map(|&idx| EdgeIndex(idx as u32))
+    pub fn new() -> Self {
+        VecGraph {
+            num_nodes: 0,
+            num_edges: 0,
+            node_weights: vec![],
+            edges: vec![],
+            incoming_edges: vec![],
+            outgoing_edges: vec![],
+            ty: PhantomData,
+        }
+    }
+
+    pub fn with_capacity(node_count: usize, edge_count: usize) -> Self {
+        VecGraph {
+            num_nodes: 0,
+            num_edges: 0,
+            node_weights: Vec::with_capacity(node_count),
+            edges: Vec::with_capacity(edge_count),
+            incoming_edges: Vec::with_capacity(node_count),
+            outgoing_edges: Vec::with_capacity(node_count),
+            ty: PhantomData,
+        }
+    }
+
+    pub fn add_node(&mut self, weight: N) -> NodeIndex {
+        self.num_nodes += 1;
+        self.node_weights.push(weight);
+        self.incoming_edges.push(vec![]);
+        self.outgoing_edges.push(vec![]);
+
+        NodeIndex(self.num_nodes as u32 - 1)
+    }
+
+    pub fn node_indices(&self) -> Map<Range<usize>, fn(usize) -> NodeIndex> {
+        (0..self.num_nodes).map(NodeIndex::new)
     }
 
     pub fn contains_edge(&self, src: NodeIndex, dst: NodeIndex) -> bool {
@@ -191,33 +257,25 @@ impl<N, E> VecGraph<N, E> {
             self[idx] = weight;
             idx
         } else {
-            let idx = EdgeIndex(self.num_edges as u32);
-            self.incoming_edges[b.index()].push(self.num_edges);
-            self.outgoing_edges[a.index()].push(self.num_edges);
-            self.edges.push((a.index(), b.index(), weight));
-            self.num_edges += 1;
-            idx
+            self.add_edge(a, b, weight)
         }
     }
 
-    pub fn update_edge_with<F>(&mut self,
-                               a: NodeIndex,
-                               b: NodeIndex,
-                               weight_fn: F,
-                               weight_default: E)
-                               -> EdgeIndex
-        where F: Fn(&E) -> E
+    pub fn update_edge_with<F>(
+        &mut self,
+        a: NodeIndex,
+        b: NodeIndex,
+        weight_fn: F,
+        weight_default: E,
+    ) -> EdgeIndex
+    where
+        F: Fn(&E) -> E,
     {
         if let Some(idx) = self.find_edge(a, b) {
             self[idx] = weight_fn(&self[idx]);
             idx
         } else {
-            let idx = EdgeIndex(self.num_edges as u32);
-            self.incoming_edges[b.index()].push(self.num_edges);
-            self.outgoing_edges[a.index()].push(self.num_edges);
-            self.edges.push((a.index(), b.index(), weight_default));
-            self.num_edges += 1;
-            idx
+            self.add_edge(a, b, weight_default)
         }
     }
 
@@ -234,13 +292,16 @@ impl<N, E> VecGraph<N, E> {
         self.num_edges
     }
 
-
-    pub fn edge_indices_directed<'a, F>
-        (&'a self,
-         a: NodeIndex,
-         dir: Direction)
-         -> Map<Edges<'a, N, E>, fn(EdgeReference<'a, E>) -> EdgeIndex> {
+    pub fn edge_indices_directed<'a, F>(
+        &'a self,
+        a: NodeIndex,
+        dir: Direction,
+    ) -> Map<Edges<'a, N, E, D>, fn(EdgeReference<'a, E>) -> EdgeIndex> {
         self.edges_directed(a, dir).map(edge_id::<E>)
+    }
+
+    pub fn edge_weights_mut(&mut self) -> impl Iterator<Item = &mut E> {
+        self.edges.iter_mut().map(|(_, _, w)| w)
     }
 
     pub fn edge_endpoints(&self, index: EdgeIndex) -> Option<(NodeIndex, NodeIndex)> {
@@ -250,8 +311,9 @@ impl<N, E> VecGraph<N, E> {
     }
 
     pub fn filter_map<F, G, N2, E2>(&self, node_map: F, edge_map: G) -> Graph<N2, E2>
-        where F: Fn(NodeIndex, &N) -> Option<N2>,
-              G: Fn(EdgeIndex, &E) -> Option<E2>
+    where
+        F: Fn(NodeIndex, &N) -> Option<N2>,
+        G: Fn(EdgeIndex, &E) -> Option<E2>,
     {
         let mut new_nodes = Vec::with_capacity(self.node_count());
         let mut blacklist = FnvHashSet::default();
@@ -287,40 +349,91 @@ impl<N, E> VecGraph<N, E> {
             edges: new_edges,
             incoming_edges: incoming,
             outgoing_edges: outgoing,
+            ty: PhantomData,
+        }
+    }
+
+    pub fn find_edge(&self, src: NodeIndex, dst: NodeIndex) -> Option<EdgeIndex> {
+        if !Self::is_directed() && src > dst {
+            self.find_edge(dst, src)
+        } else {
+            self.outgoing_edges[src.index()]
+                .iter()
+                .find(|&idx| self.edges[*idx].1 == dst.index())
+                .map(|&idx| EdgeIndex(idx as u32))
+        }
+    }
+
+    pub fn add_edge(&mut self, a: NodeIndex, b: NodeIndex, weight: E) -> EdgeIndex {
+        if !Self::is_directed() && a > b {
+            self.add_edge(b, a, weight)
+        } else {
+            let idx = EdgeIndex(self.num_edges as u32);
+            self.incoming_edges[b.index()].push(self.num_edges);
+            self.outgoing_edges[a.index()].push(self.num_edges);
+            self.edges.push((a.index(), b.index(), weight));
+            self.num_edges += 1;
+            idx
+        }
+    }
+
+    /// Remove an edge `e` from the network. This invalidates *ALL* edge indices greater than `e`.
+    ///
+    /// If you use this method, don't hold on to edge indices.
+    ///
+    /// This is an O(m) operation because this structure is backed by a Vec.
+    pub fn remove_edge(&mut self, e: EdgeIndex) -> Option<(NodeIndex, NodeIndex, E)> {
+        if e.index() >= self.num_edges {
+            None
+        } else {
+            let (a, b, w) = self.edges.remove(e.index());
+            self.incoming_edges[b].retain(|&ix| ix != e.index());
+            self.outgoing_edges[a].retain(|&ix| ix != e.index());
+            self.num_edges -= 1;
+            Some((NodeIndex(a as u32), NodeIndex(b as u32), w))
+        }
+    }
+
+    pub fn raw_edgelist(&self) -> &[(usize, usize, E)] {
+        &self.edges
+    }
+
+    pub fn raw_edges(&self, a: NodeIndex, dir: Direction) -> &[usize] {
+        match dir {
+            Direction::Outgoing => &self.outgoing_edges[a.index()],
+            Direction::Incoming => &self.incoming_edges[a.index()],
         }
     }
 }
 
-impl<N, E> GraphBase for VecGraph<N, E> {
+impl<N, E, D> GraphBase for VecGraph<N, E, D> {
     type EdgeId = EdgeIndex;
     type NodeId = NodeIndex;
 }
 
-pub struct Neighbors<'a, N: 'a, E: 'a> {
-    g: &'a Graph<N, E>,
-    dir: Direction,
-    internal: Iter<'a, usize>,
+pub struct Neighbors<'a, N: 'a, E: 'a, D: 'a> {
+    g: &'a Graph<N, E, D>,
+    internal: Box<dyn Iterator<Item = (usize, Direction)> + 'a>,
 }
 
-impl<'a, N, E> Neighbors<'a, N, E> {
+impl<'a, N, E, D> Neighbors<'a, N, E, D> {
     pub fn detach(self) -> NeighborWalker {
-        let dir = self.dir;
         NeighborWalker {
             index: 0,
-            dir: dir,
-            internal: self.internal
-                .map(|&idx| EdgeIndex(idx as u32))
+            internal: self
+                .internal
+                .map(|(idx, dir)| (EdgeIndex(idx as u32), dir))
                 .collect(),
         }
     }
 }
 
-impl<'a, N, E> Iterator for Neighbors<'a, N, E> {
+impl<'a, N, E, D> Iterator for Neighbors<'a, N, E, D> {
     type Item = NodeIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.internal.next().map(|&idx| {
-            NodeIndex(match self.dir {
+        self.internal.next().map(|(idx, dir)| {
+            NodeIndex(match dir {
                 Outgoing => self.g.edges[idx].1 as u32,
                 Incoming => self.g.edges[idx].0 as u32,
             })
@@ -330,8 +443,7 @@ impl<'a, N, E> Iterator for Neighbors<'a, N, E> {
 
 #[derive(Clone, Debug)]
 pub struct NeighborWalker {
-    internal: Vec<EdgeIndex>,
-    dir: Direction,
+    internal: Vec<(EdgeIndex, Direction)>,
     index: usize,
 }
 
@@ -341,9 +453,9 @@ impl NeighborWalker {
             return None;
         }
 
-        let edge = self.internal[self.index];
+        let (edge, dir) = self.internal[self.index];
         self.index += 1;
-        let node = match self.dir {
+        let node = match dir {
             Outgoing => NodeIndex(g.edges[edge.index()].1 as u32),
             Incoming => NodeIndex(g.edges[edge.index()].0 as u32),
         };
@@ -360,13 +472,12 @@ impl NeighborWalker {
     }
 }
 
-pub struct Edges<'a, N: 'a, E: 'a> {
-    graph: &'a Graph<N, E>,
+pub struct Edges<'a, N: 'a, E: 'a, D> {
+    graph: &'a Graph<N, E, D>,
     internal: Iter<'a, usize>,
 }
 
-
-impl<'a, N, E> Iterator for Edges<'a, N, E> {
+impl<'a, N, E, D> Iterator for Edges<'a, N, E, D> {
     type Item = EdgeReference<'a, E>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -436,44 +547,68 @@ impl Iterator for EdgeIndices {
     }
 }
 
-impl<'a, N, E> IntoNeighbors for &'a Graph<N, E> {
-    type Neighbors = Neighbors<'a, N, E>;
+impl<'a, N, E, D> IntoNeighbors for &'a Graph<N, E, D>
+where
+    D: EdgeType,
+{
+    type Neighbors = Neighbors<'a, N, E, D>;
 
     fn neighbors(self, n: NodeIndex) -> Self::Neighbors {
-        self.neighbors_directed(n, Direction::Outgoing)
-    }
-}
-
-impl<'a, N, E> IntoNeighborsDirected for &'a Graph<N, E> {
-    type NeighborsDirected = Neighbors<'a, N, E>;
-
-    fn neighbors_directed(self, n: NodeIndex, d: Direction) -> Self::NeighborsDirected {
-        match d {
-            Direction::Outgoing => {
-                Neighbors {
-                    g: &self,
-                    dir: d,
-                    internal: self.outgoing_edges[n.index()].iter(),
-                }
-            }
-            Direction::Incoming => {
-                Neighbors {
-                    g: &self,
-                    dir: d,
-                    internal: self.incoming_edges[n.index()].iter(),
-                }
+        if D::is_directed() {
+            self.neighbors_directed(n, Direction::Outgoing)
+        } else {
+            Neighbors {
+                g: &self,
+                internal: Box::new(
+                    self.outgoing_edges[n.index()]
+                        .iter()
+                        .map(|&ix| (ix, Outgoing))
+                        .chain(
+                            self.incoming_edges[n.index()]
+                                .iter()
+                                .map(|&ix| (ix, Incoming)),
+                        ),
+                ),
             }
         }
     }
 }
 
-impl<N, E> NodeCount for Graph<N, E> {
+impl<'a, N, E, D> IntoNeighborsDirected for &'a Graph<N, E, D>
+where
+    D: EdgeType,
+{
+    type NeighborsDirected = Neighbors<'a, N, E, D>;
+
+    fn neighbors_directed(self, n: NodeIndex, d: Direction) -> Self::NeighborsDirected {
+        match d {
+            Direction::Outgoing => Neighbors {
+                g: &self,
+                internal: Box::new(
+                    self.outgoing_edges[n.index()]
+                        .iter()
+                        .map(move |&ix| (ix, d)),
+                ),
+            },
+            Direction::Incoming => Neighbors {
+                g: &self,
+                internal: Box::new(
+                    self.incoming_edges[n.index()]
+                        .iter()
+                        .map(move |&ix| (ix, d)),
+                ),
+            },
+        }
+    }
+}
+
+impl<N, E, D> NodeCount for Graph<N, E, D> {
     fn node_count(&self) -> usize {
         self.num_nodes
     }
 }
 
-impl<N, E> NodeIndexable for Graph<N, E> {
+impl<N, E, D> NodeIndexable for Graph<N, E, D> {
     fn node_bound(&self) -> usize {
         self.num_nodes
     }
@@ -487,34 +622,37 @@ impl<N, E> NodeIndexable for Graph<N, E> {
     }
 }
 
-impl<N, E> NodeCompactIndexable for Graph<N, E> {}
+impl<N, E, D> NodeCompactIndexable for Graph<N, E, D> {}
 
-impl<N, E> Index<EdgeIndex> for Graph<N, E> {
+impl<N, E, D> Index<EdgeIndex> for Graph<N, E, D> {
     type Output = E;
     fn index(&self, index: EdgeIndex) -> &E {
         &self.edges[index.index()].2
     }
 }
-impl<N, E> IndexMut<EdgeIndex> for Graph<N, E> {
+impl<N, E, D> IndexMut<EdgeIndex> for Graph<N, E, D> {
     fn index_mut(&mut self, index: EdgeIndex) -> &mut E {
         &mut self.edges[index.index()].2
     }
 }
 
-impl<N, E> Index<NodeIndex> for Graph<N, E> {
+impl<N, E, D> Index<NodeIndex> for Graph<N, E, D> {
     type Output = N;
     fn index(&self, index: NodeIndex) -> &N {
         &self.node_weights[index.index()]
     }
 }
 
-impl<N, E> IndexMut<NodeIndex> for Graph<N, E> {
+impl<N, E, D> IndexMut<NodeIndex> for Graph<N, E, D> {
     fn index_mut(&mut self, index: NodeIndex) -> &mut N {
         &mut self.node_weights[index.index()]
     }
 }
 
-impl<'a, N, E> IntoNodeIdentifiers for &'a Graph<N, E> {
+impl<'a, N, E, D> IntoNodeIdentifiers for &'a Graph<N, E, D>
+where
+    D: EdgeType,
+{
     type NodeIdentifiers = Map<Range<usize>, fn(usize) -> NodeIndex>;
 
     fn node_identifiers(self) -> Self::NodeIdentifiers {
@@ -522,16 +660,22 @@ impl<'a, N, E> IntoNodeIdentifiers for &'a Graph<N, E> {
     }
 }
 
-impl<N, E> GraphProp for Graph<N, E> {
-    type EdgeType = petgraph::Directed;
+impl<N, E, D> GraphProp for Graph<N, E, D>
+where
+    D: EdgeType,
+{
+    type EdgeType = D;
 }
 
-impl<N, E> Data for Graph<N, E> {
+impl<N, E, D> Data for Graph<N, E, D> {
     type NodeWeight = N;
     type EdgeWeight = E;
 }
 
-impl<'a, N, E> IntoNodeReferences for &'a Graph<N, E> {
+impl<'a, N, E, D> IntoNodeReferences for &'a Graph<N, E, D>
+where
+    D: EdgeType,
+{
     type NodeRef = (NodeIndex, &'a N);
     type NodeReferences = Map<Enumerate<Iter<'a, N>>, fn((usize, &'a N)) -> Self::NodeRef>;
     fn node_references(self) -> Self::NodeReferences {
@@ -542,14 +686,20 @@ impl<'a, N, E> IntoNodeReferences for &'a Graph<N, E> {
     }
 }
 
-impl<'a, N, E> IntoEdgeReferences for &'a Graph<N, E> {
+impl<'a, N, E, D> IntoEdgeReferences for &'a Graph<N, E, D>
+where
+    D: EdgeType,
+{
     type EdgeRef = EdgeReference<'a, E>;
-    type EdgeReferences = Map<Enumerate<Iter<'a, (usize, usize, E)>>,
-        fn((usize, &'a (usize, usize, E))) -> Self::EdgeRef>;
+    type EdgeReferences = Map<
+        Enumerate<Iter<'a, (usize, usize, E)>>,
+        fn((usize, &'a (usize, usize, E))) -> Self::EdgeRef,
+    >;
 
     fn edge_references(self) -> Self::EdgeReferences {
-        fn mapper<'a, E>((idx, &(src, dst, ref weight)): (usize, &'a (usize, usize, E)))
-                         -> EdgeReference<'a, E> {
+        fn mapper<'a, E>(
+            (idx, &(src, dst, ref weight)): (usize, &'a (usize, usize, E)),
+        ) -> EdgeReference<'a, E> {
             EdgeReference {
                 source: src,
                 dest: dst,
@@ -562,17 +712,66 @@ impl<'a, N, E> IntoEdgeReferences for &'a Graph<N, E> {
     }
 }
 
+impl<'a, N, E> IntoEdges for &'a Graph<N, E, Directed> {
+    type Edges = Box<dyn Iterator<Item = Self::EdgeRef> + 'a>;
+
+    fn edges(self, a: NodeIndex) -> Self::Edges {
+        Box::new(self.outgoing_edges[a.index()].iter().map(move |&ix| {
+            let (source, dest, ref weight) = self.edges[ix];
+            EdgeReference {
+                source,
+                dest,
+                weight,
+                index: ix,
+            }
+        }))
+    }
+}
+
+impl<'a, N, E> IntoEdges for &'a Graph<N, E, Undirected> {
+    type Edges = Box<dyn Iterator<Item = Self::EdgeRef> + 'a>;
+
+    fn edges(self, a: NodeIndex) -> Self::Edges {
+        Box::new(
+            self.outgoing_edges[a.index()]
+                .iter()
+                .map(move |&ix| {
+                    let (source, dest, ref weight) = self.edges[ix];
+                    EdgeReference {
+                        source,
+                        dest,
+                        weight,
+                        index: ix,
+                    }
+                })
+                .chain(self.incoming_edges[a.index()].iter().map(move |&ix| {
+                    let (source, dest, ref weight) = self.edges[ix];
+                    // flip the direction so that a == source always
+                    EdgeReference {
+                        source: dest,
+                        dest: source,
+                        weight,
+                        index: ix,
+                    }
+                })),
+        )
+    }
+}
+
 pub trait IntoNeighborEdgesDirected: petgraph::visit::GraphRef + petgraph::visit::Data {
-    type ER: EdgeRef<NodeId=Self::NodeId, EdgeId=Self::EdgeId, Weight=Self::EdgeWeight>;
+    type ER: EdgeRef<NodeId = Self::NodeId, EdgeId = Self::EdgeId, Weight = Self::EdgeWeight>;
     type NeighborEdgesDirected: Iterator<Item = Self::ER>;
 
     fn edges_directed(self, a: Self::NodeId, dir: Direction) -> Self::NeighborEdgesDirected;
 }
 
-impl<'a, N, E> IntoNeighborEdgesDirected for &'a Graph<N, E> {
-    type NeighborEdgesDirected = Edges<'a, N, E>;
+impl<'a, N, E, D> IntoNeighborEdgesDirected for &'a Graph<N, E, D>
+where
+    D: EdgeType,
+{
+    type NeighborEdgesDirected = Edges<'a, N, E, D>;
     type ER = EdgeReference<'a, E>;
-    fn edges_directed(self, a: NodeIndex, dir: Direction) -> Edges<'a, N, E> {
+    fn edges_directed(self, a: NodeIndex, dir: Direction) -> Edges<'a, N, E, D> {
         Edges {
             graph: self,
             internal: match dir {
@@ -592,7 +791,6 @@ impl<'a, N, E> IntoNeighborEdgesDirected for &'a petgraph::Graph<N, E> {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -609,52 +807,124 @@ mod test {
 
         for node in g.node_indices() {
             let vnode = NodeIndex(node.index() as u32);
-            assert!(g.edges_directed(node, Outgoing).count() ==
-                    vg.edges_directed(vnode, Outgoing).count());
-            assert!(g.edges_directed(node, Incoming).count() ==
-                    vg.edges_directed(vnode, Incoming).count());
+            assert!(
+                g.edges_directed(node, Outgoing).count()
+                    == vg.edges_directed(vnode, Outgoing).count()
+            );
+            assert!(
+                g.edges_directed(node, Incoming).count()
+                    == vg.edges_directed(vnode, Incoming).count()
+            );
 
-            let sum = g.edges_directed(node, Outgoing).map(|edge| *edge.weight()).sum::<f32>();
-            let vsum = vg.edges_directed(vnode, Outgoing).map(|edge| *edge.weight()).sum::<f32>();
+            let sum = g
+                .edges_directed(node, Outgoing)
+                .map(|edge| *edge.weight())
+                .sum::<f32>();
+            let vsum = vg
+                .edges_directed(vnode, Outgoing)
+                .map(|edge| *edge.weight())
+                .sum::<f32>();
 
             assert!((sum - vsum).abs() < 1e-3);
 
-            let sum = g.edges_directed(node, Incoming).map(|edge| *edge.weight()).sum::<f32>();
-            let vsum = vg.edges_directed(vnode, Incoming).map(|edge| *edge.weight()).sum::<f32>();
+            let sum = g
+                .edges_directed(node, Incoming)
+                .map(|edge| *edge.weight())
+                .sum::<f32>();
+            let vsum = vg
+                .edges_directed(vnode, Incoming)
+                .map(|edge| *edge.weight())
+                .sum::<f32>();
 
             assert!((sum - vsum).abs() < 1e-3);
 
-            let down = g.neighbors_directed(node, Outgoing)
+            let down = g
+                .neighbors_directed(node, Outgoing)
                 .map(|node| node.index())
                 .collect::<BTreeSet<_>>();
-            let vdown = vg.neighbors_directed(vnode, Outgoing)
+            let vdown = vg
+                .neighbors_directed(vnode, Outgoing)
                 .map(|node| node.index())
                 .collect::<BTreeSet<_>>();
             assert!(down == vdown);
 
-            let up = g.neighbors_directed(node, Incoming)
+            let up = g
+                .neighbors_directed(node, Incoming)
                 .map(|node| node.index())
                 .collect::<BTreeSet<_>>();
-            let vup = vg.neighbors_directed(vnode, Incoming)
+            let vup = vg
+                .neighbors_directed(vnode, Incoming)
                 .map(|node| node.index())
                 .collect::<BTreeSet<_>>();
             assert!(up == vup);
 
-            let up = g.edges_directed(node, Incoming)
+            let up = g
+                .edges_directed(node, Incoming)
                 .map(|edge| edge.source().index())
                 .collect::<BTreeSet<_>>();
-            let vup = vg.edges_directed(vnode, Incoming)
+            let vup = vg
+                .edges_directed(vnode, Incoming)
                 .map(|edge| edge.source().index())
                 .collect::<BTreeSet<_>>();
             assert!(up == vup);
 
-            let down = g.edges_directed(node, Outgoing)
+            let down = g
+                .edges_directed(node, Outgoing)
                 .map(|edge| edge.target().index())
                 .collect::<BTreeSet<_>>();
-            let vdown = vg.edges_directed(vnode, Outgoing)
+            let vdown = vg
+                .edges_directed(vnode, Outgoing)
                 .map(|edge| edge.target().index())
                 .collect::<BTreeSet<_>>();
             assert!(down == vdown);
         }
+    }
+
+    #[test]
+    fn test_undirected() {
+        let mut vg = VecGraph::<(), (), Undirected>::new();
+
+        let a = vg.add_node(());
+        let b = vg.add_node(());
+        let c = vg.add_node(());
+
+        vg.add_edge(b, a, ());
+        vg.add_edge(c, a, ());
+        vg.add_edge(b, c, ());
+
+        let a_neighbors = vg.neighbors(a).collect::<Vec<_>>();
+
+        assert_eq!(a_neighbors, vec![b, c]);
+
+        let a_edges = vg.edges(a).map(|eref| eref.target()).collect::<Vec<_>>();
+        assert_eq!(a_edges, vec![b, c]);
+
+        let b_edges = vg.edges(b).map(|eref| eref.target()).collect::<Vec<_>>();
+        assert_eq!(b_edges, vec![c, a]);
+    }
+
+    #[test]
+    fn test_remove_edge() {
+        let g = capngraph::load_graph("data/ca-GrQc.bin").unwrap();
+        let mut vg = Graph::from_petgraph(g.clone());
+
+        let e = EdgeIndex(100);
+        let (a, b) = vg.edge_endpoints(e).unwrap();
+
+        let degree_a = vg.neighbors_directed(a, Outgoing).count();
+        let degree_b = vg.neighbors_directed(b, Incoming).count();
+
+        assert!(vg.neighbors_directed(a, Outgoing).any(|n| n == b));
+        assert!(vg.neighbors_directed(b, Incoming).any(|n| n == a));
+
+        vg.remove_edge(e);
+
+        // they still have the other edges
+        assert_eq!(vg.neighbors(a).count(), degree_a - 1);
+        assert_eq!(vg.neighbors_directed(b, Incoming).count(), degree_b - 1);
+
+        // they no longer have the given edge
+        assert!(!vg.neighbors_directed(a, Outgoing).any(|n| n == b));
+        assert!(!vg.neighbors_directed(b, Incoming).any(|n| n == a));
     }
 }
