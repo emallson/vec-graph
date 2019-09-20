@@ -45,7 +45,7 @@ use vec_graph::{NodeIndex, EdgeIndex, Graph};
 ```
 
 ## License
-Copyright (c) 2017, J. David Smith
+Copyright (c) 2017-2019, J. David Smith
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
