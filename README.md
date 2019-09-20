@@ -1,5 +1,7 @@
 # vec-graph
 
+[![Build Status](https://travis-ci.org/emallson/vec-graph.svg?branch=master)](https://travis-ci.org/emallson/vec-graph)
+
 ```toml
 [dependencies]
 vec-graph = {"git": "https://github.com/emallson/vec-graph.git"}
