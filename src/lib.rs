@@ -1,14 +1,16 @@
 #[cfg(test)]
 extern crate capngraph;
+extern crate fixedbitset;
 extern crate fnv;
 extern crate petgraph;
 
+use fixedbitset::FixedBitSet;
 use fnv::{FnvHashMap, FnvHashSet};
 use petgraph::graph;
 use petgraph::visit::{
     Data, EdgeRef, GraphBase, GraphProp, IntoEdgeReferences, IntoEdges, IntoNeighbors,
     IntoNeighborsDirected, IntoNodeIdentifiers, IntoNodeReferences, NodeCompactIndexable,
-    NodeCount, NodeIndexable,
+    NodeCount, NodeIndexable, VisitMap, Visitable,
 };
 use petgraph::Direction;
 use petgraph::Direction::*;
@@ -381,7 +383,7 @@ where
     ///
     /// If you use this method, don't hold on to edge indices.
     ///
-    /// This is an O(m) operation because this structure is backed by a Vec.
+    /// This is EXPENSIVE. Avoid.
     pub fn remove_edge(&mut self, e: EdgeIndex) -> Option<(NodeIndex, NodeIndex, E)> {
         if e.index() >= self.num_edges {
             None
@@ -390,6 +392,23 @@ where
             self.incoming_edges[b].retain(|&ix| ix != e.index());
             self.outgoing_edges[a].retain(|&ix| ix != e.index());
             self.num_edges -= 1;
+
+            for eids in &mut self.incoming_edges {
+                for eid in eids {
+                    if *eid > e.index() {
+                        *eid -= 1;
+                    }
+                }
+            }
+
+            for eids in &mut self.outgoing_edges {
+                for eid in eids {
+                    if *eid > e.index() {
+                        *eid -= 1;
+                    }
+                }
+            }
+
             Some((NodeIndex(a as u32), NodeIndex(b as u32), w))
         }
     }
@@ -791,6 +810,28 @@ impl<'a, N, E> IntoNeighborEdgesDirected for &'a petgraph::Graph<N, E> {
     }
 }
 
+impl<'a, N, E, D> Visitable for &'a Graph<N, E, D> {
+    type Map = FixedBitSet;
+
+    fn visit_map(&self) -> FixedBitSet {
+        FixedBitSet::with_capacity(self.node_count())
+    }
+
+    fn reset_map(&self, map: &mut FixedBitSet) {
+        map.clear()
+    }
+}
+
+impl VisitMap<NodeIndex> for FixedBitSet {
+    fn visit(&mut self, NodeIndex(ix): NodeIndex) -> bool {
+        !self.put(ix as usize)
+    }
+
+    fn is_visited(&self, &NodeIndex(ix): &NodeIndex) -> bool {
+        self.contains(ix as usize)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -914,13 +955,15 @@ mod test {
         let degree_a = vg.neighbors_directed(a, Outgoing).count();
         let degree_b = vg.neighbors_directed(b, Incoming).count();
 
+        println!("{} {}", degree_a, degree_b);
+
         assert!(vg.neighbors_directed(a, Outgoing).any(|n| n == b));
         assert!(vg.neighbors_directed(b, Incoming).any(|n| n == a));
 
         vg.remove_edge(e);
 
         // they still have the other edges
-        assert_eq!(vg.neighbors(a).count(), degree_a - 1);
+        assert_eq!(vg.neighbors_directed(a, Outgoing).count(), degree_a - 1);
         assert_eq!(vg.neighbors_directed(b, Incoming).count(), degree_b - 1);
 
         // they no longer have the given edge

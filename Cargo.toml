@@ -1,11 +1,11 @@
 [package]
-authors = ["J David Smith <emallson@atlanis.net>"]
 name = "vec-graph"
 version = "0.1.0"
 
 [dependencies]
 fnv = "1.0.5"
 petgraph = "0.4.7"
+fixedbitset = "0.1.9"
 
 [dev-dependencies]
 
