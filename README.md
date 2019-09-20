@@ -14,6 +14,24 @@ random nodes is needed). **Do not simply insert this blindly and assume it will
 be faster!** For *almost all* cases I've tried, `petgraph`'s default
 implementation is faster.
 
+## When to Use `vec-graph`
+
+If you are:
+
+1. Working with large networks and frequent calls to `Graph::neighbors`
+2. Doing almost exclusively calls to `Graph::neighbors`
+
+then you should *consider* using `vec-graph`. `petgraph` is **very
+fast**, you probably don't need this.
+
+However, in cases where the dominant factor is calls to
+`Graph::neighbors`, such as simulating random walks, this can be a
+substantial performance upgrade.
+
+In fact, some methods of `vec-graph` are *so* much slower than
+`petgraph::Graph` (notably edge removal) that if you ever call them
+you're probably already worse off than just using `petgraph`.
+
 ## Usage
 
 ```rust
