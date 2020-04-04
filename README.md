@@ -22,13 +22,16 @@ If you are:
 
 1. Working with large networks and frequent calls to `Graph::neighbors`
 2. Doing almost exclusively calls to `Graph::neighbors`
+3. Working with directed graphs.
 
 then you should *consider* using `vec-graph`. `petgraph` is **very
 fast**, you probably don't need this.
 
 However, in cases where the dominant factor is calls to
-`Graph::neighbors`, such as simulating random walks, this can be a
-substantial performance upgrade.
+`Graph::neighbors`, such as simulating random walks **on directed
+graphs,** this can be a substantial performance upgrade. (It can also be
+in the undirected case, just not by as much because it isn't optimized
+for it)
 
 In fact, some methods of `vec-graph` are *so* much slower than
 `petgraph::Graph` (notably edge removal) that if you ever call them
